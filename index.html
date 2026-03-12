@@ -1133,9 +1133,8 @@ function getEmojiForQuery(query) {
 }
 
 function fetchImage(query) {
-  const emoji = getEmojiForQuery(query);
-  if (emoji) return Promise.resolve({ type: 'emoji', emoji });
-  return Promise.resolve(null);
+  const url = `https://source.unsplash.com/400x300/?${encodeURIComponent(query)},cute`;
+  return Promise.resolve({ type: 'img', url, fallbackQuery: query });
 }
 
 function parseImageTag(text) {

@@ -922,8 +922,9 @@ function isAdminMode() {
 }
 function checkAdminParam() {
   const p = new URLSearchParams(location.search).get('admin');
-  if (p === 'wes2025') localStorage.setItem('wes_admin', '1');
   if (p === 'off') localStorage.removeItem('wes_admin');
+  // 注意：URL param 開啟 admin 已移除（避免密碼出現在瀏覽器歷史記錄）
+  // 開啟方式：logo 連點 5 下 → 輸入 admin key
 }
 // logo 連點 5 下 → 輸入 admin key
 function handleLogoTap() {
@@ -1020,24 +1021,31 @@ function logout() {
   sessionActive = false;
   isWaitingForResponse = false;
   clearInterval(timerInterval);
+  clearTimeout(idleTimer);
+  idleTimer = null;
   secondsLeft = 15 * 60;
   window.speechSynthesis && window.speechSynthesis.cancel();
   stopTTSKeepAlive();
+  // 清除 session 驗證與 admin 狀態
+  sessionStorage.removeItem('accessCode');
+  localStorage.removeItem('wes_admin');
   // 重置所有輸入介面狀態，確保下次登入不殘留 disabled
   const voiceBtn = document.getElementById('voice-btn');
   voiceBtn.disabled = false;
   voiceBtn.style.opacity = '';
-  document.getElementById('send-btn').disabled = true; // 空輸入框，正確應為 disabled
+  document.getElementById('send-btn').disabled = true;
   document.getElementById('text-input').disabled = false;
   document.getElementById('text-input').value = '';
   document.getElementById('chat-area').innerHTML = '';
   document.getElementById('app').style.display = 'none';
+  // 回到存取閘門讓使用者重新驗證
+  document.getElementById('access-input').value = '';
+  document.getElementById('access-error').textContent = '';
+  document.getElementById('access-gate').style.display = 'flex';
   document.getElementById('setup-screen').style.display = 'flex';
   document.getElementById('timer-display').textContent = '15:00';
   document.getElementById('timer-display').className = '';
   document.getElementById('status-text').textContent = '在這裡';
-  updateSetupScreen();
-  if (isInCooldown()) startCooldownCountdown();
 }
 
 function startSession() {
@@ -1326,16 +1334,35 @@ function checkForFlags(response, userMsg) {
 
 function updateFlagsPanel() {
   const el = document.getElementById('review-flags');
+  el.innerHTML = '';
   if (sessionFlags.length === 0) {
-    el.innerHTML = '<div style="color:var(--text-dim);font-size:13px;">本次尚無標記。</div>';
+    const empty = document.createElement('div');
+    empty.style.cssText = 'color:var(--text-dim);font-size:13px;';
+    empty.textContent = '本次尚無標記。';
+    el.appendChild(empty);
     return;
   }
-  el.innerHTML = sessionFlags.map(f => `
-    <div class="flag-item">
-      <div class="flag-time">${f.time}</div>
-      <strong>${f.reason}</strong><br>
-      <span style="font-size:12px;opacity:0.7">${f.context}</span>
-    </div>`).join('');
+  sessionFlags.forEach(f => {
+    const item = document.createElement('div');
+    item.className = 'flag-item';
+
+    const time = document.createElement('div');
+    time.className = 'flag-time';
+    time.textContent = f.time;
+
+    const reason = document.createElement('strong');
+    reason.textContent = f.reason;
+
+    const context = document.createElement('span');
+    context.style.cssText = 'font-size:12px;opacity:0.7';
+    context.textContent = f.context;
+
+    item.appendChild(time);
+    item.appendChild(reason);
+    item.appendChild(document.createElement('br'));
+    item.appendChild(context);
+    el.appendChild(item);
+  });
 }
 
 // ── Parent Panel ──

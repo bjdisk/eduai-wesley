@@ -1154,9 +1154,54 @@ const EMOJI_COLORS = [
   '#3d1e2e','#1e2d3d','#2d3d1e','#3d3d1e'
 ];
 
+const ZH_ALIAS = {
+  '美人魚':'mermaid','人魚':'mermaid','獨角獸':'unicorn',
+  '恐龍':'dinosaur','暴龍':'rex','三角龍':'triceratops','翼龍':'dinosaur',
+  '長頸鹿':'giraffe','大象':'elephant','獅子':'lion','老虎':'tiger',
+  '熊貓':'panda','貓熊':'panda','北極熊':'bear','棕熊':'bear',
+  '猴子':'monkey','狗':'dog','貓':'cat','兔子':'rabbit','狐狸':'fox',
+  '狼':'wolf','馬':'horse','牛':'cow','豬':'pig','羊':'sheep',
+  '鹿':'deer','河馬':'hippo','犀牛':'rhino','斑馬':'zebra',
+  '袋鼠':'kangaroo','無尾熊':'koala','樹懶':'sloth','水獺':'otter',
+  '蝙蝠':'bat','刺蝟':'hedgehog','浣熊':'raccoon',
+  '青蛙':'frog','蛇':'snake','鱷魚':'crocodile','駱駝':'camel',
+  '老鼠':'mouse','松鼠':'squirrel','海狸':'beaver',
+  '魚':'fish','鯊魚':'shark','鯨魚':'whale','海豚':'dolphin','章魚':'octopus',
+  '螃蟹':'crab','龍蝦':'lobster','烏龜':'turtle','海豹':'seal','水母':'jellyfish',
+  '鳥':'bird','老鷹':'eagle','貓頭鷹':'owl','企鵝':'penguin','鸚鵡':'parrot',
+  '火鶴':'flamingo','孔雀':'peacock','鴨子':'duck','雞':'chicken','天鵝':'swan',
+  '蝴蝶':'butterfly','蜜蜂':'bee','螞蟻':'ant','蜘蛛':'spider','蝸牛':'snail',
+  '龍':'dragon',
+  '樹':'tree','花':'flower','玫瑰':'rose','向日葵':'sunflower','仙人掌':'cactus',
+  '蘑菇':'mushroom','葉子':'leaf','竹子':'bamboo',
+  '蘋果':'apple','香蕉':'banana','西瓜':'watermelon','橘子':'orange','葡萄':'grape',
+  '草莓':'strawberry','芒果':'mango','鳳梨':'pineapple','櫻桃':'cherry',
+  '紅蘿蔔':'carrot','玉米':'corn','番茄':'tomato','馬鈴薯':'potato',
+  '披薩':'pizza','漢堡':'hamburger','飯':'rice','麵':'noodle','蛋糕':'cake',
+  '冰淇淋':'icecream','餅乾':'cookie','巧克力':'chocolate','糖果':'candy','麵包':'bread',
+  '蛋':'egg','起司':'cheese','餃子':'dumpling','壽司':'sushi',
+  '車':'car','公車':'bus','火車':'train','飛機':'airplane','火箭':'rocket',
+  '船':'ship','腳踏車':'bicycle','直升機':'helicopter','氣球':'balloon','UFO':'ufo',
+  '月亮':'moon','太陽':'sun','星星':'star','地球':'earth','彗星':'comet',
+  '銀河':'galaxy','太空人':'astronaut','衛星':'satellite','行星':'planet',
+  '山':'mountain','火山':'volcano','海洋':'ocean','彩虹':'rainbow','雲':'cloud',
+  '雪':'snow','閃電':'lightning','火':'fire','水':'water','風':'wind',
+  '房子':'house','城堡':'castle','學校':'school','醫院':'hospital','帳篷':'tent',
+  '地圖':'map','地球儀':'globe',
+  '泰迪熊':'teddy','風箏':'kite','球':'ball','積木':'blocks',
+  '開心':'happy','笑':'laugh','哭':'cry','生氣':'angry','睡覺':'sleep',
+  '愛心':'heart','星星眼':'star_eyes',
+};
+
 function getEmojiForQuery(query) {
   const q = query.toLowerCase().trim();
+  // 直接命中英文 key
   if (EMOJI_MAP[q]) return EMOJI_MAP[q];
+  // 中文別名對照
+  for (const [zh, en] of Object.entries(ZH_ALIAS)) {
+    if (q.includes(zh) || zh.includes(q)) return EMOJI_MAP[en] || null;
+  }
+  // 英文模糊比對
   for (const [key, emoji] of Object.entries(EMOJI_MAP)) {
     if (q.includes(key) || key.includes(q)) return emoji;
   }

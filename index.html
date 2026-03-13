@@ -676,6 +676,7 @@
 <div id="setup-screen">
   <div class="logo">Wes</div>
   <div class="tagline">Wesley 的朋友。</div>
+  <div id="daily-remaining" style="font-family:'Nunito',sans-serif;font-size:13px;color:var(--text-dim);margin-top:-8px;"></div>
   <button class="btn-primary" onclick="startApp()">開始</button>
 
   <!-- iOS PWA 安裝提示（只在 iOS + 非 standalone 時顯示） -->
@@ -769,6 +770,7 @@ let sessionFlags = [];
 let sessionActive = false;
 let timerInterval = null;
 let secondsLeft = 15 * 60;
+const DAILY_LIMIT_S = 18 * 60; // 每日總使用上限 18 分鐘
 let recognition = null;
 let isListening = false;
 let isWaitingForResponse = false;
@@ -792,8 +794,45 @@ const IDLE_MS = 5 * 60 * 1000; // 5 分鐘無互動後切換為離開狀態
   }
 })();
 
+// ── 每日配額管理 ──
+function getTodayKey() {
+  return 'wes_used_' + new Date().toISOString().slice(0, 10);
+}
+function getUsedToday() {
+  return parseInt(localStorage.getItem(getTodayKey()) || '0', 10);
+}
+function addUsedTime(secs) {
+  localStorage.setItem(getTodayKey(), getUsedToday() + secs);
+}
+function getRemainingToday() {
+  return Math.max(0, DAILY_LIMIT_S - getUsedToday());
+}
+function updateSetupScreen() {
+  const remaining = getRemainingToday();
+  const el = document.getElementById('daily-remaining');
+  const btn = document.querySelector('#setup-screen .btn-primary');
+  if (!el) return;
+  if (remaining <= 0) {
+    el.textContent = '今天的時間已經用完了 🌙 明天再來找 Wes！';
+    el.style.color = 'var(--danger)';
+    btn.disabled = true;
+    btn.style.opacity = '0.4';
+  } else {
+    const m = Math.floor(remaining / 60);
+    const s = remaining % 60;
+    el.textContent = `今天還剩 ${m}:${String(s).padStart(2,'0')}`;
+    el.style.color = 'var(--text-dim)';
+    btn.disabled = false;
+    btn.style.opacity = '';
+  }
+}
+
 // ── App Init ──
 function startApp() {
+  if (getRemainingToday() <= 0) {
+    updateSetupScreen();
+    return;
+  }
   document.getElementById('setup-screen').style.display = 'none';
   document.getElementById('app').style.display = 'flex';
   // ── 預先暖機 TTS，觸發 iOS voiceschanged ──
@@ -823,6 +862,7 @@ function logout() {
   document.getElementById('timer-display').textContent = '15:00';
   document.getElementById('timer-display').className = '';
   document.getElementById('status-text').textContent = '在這裡';
+  updateSetupScreen();
 }
 
 function startSession() {
@@ -847,12 +887,21 @@ async function sendOpeningGreeting() {
 
 // ── Timer ──
 function startTimer() {
+  // 本次 session 上限：15 分鐘 vs 今日剩餘，取較小值
+  secondsLeft = Math.min(15 * 60, getRemainingToday());
+  updateTimerDisplay();
   timerInterval = setInterval(() => {
     secondsLeft--;
+    addUsedTime(1); // 每秒累計今日使用量
     updateTimerDisplay();
     if (secondsLeft <= 0) {
       clearInterval(timerInterval);
-      sessionEnded();
+      // 判斷是否達到每日上限
+      if (getRemainingToday() <= 0) {
+        sessionEndedDailyLimit();
+      } else {
+        sessionEnded();
+      }
     }
   }, 1000);
 }
@@ -892,6 +941,26 @@ function sessionEnded() {
     showToast('今天的時間到囉！');
     addEndMsg();
   }, 60000);
+}
+
+// 每日上限到達：顯示說明後 5 秒強制登出
+function sessionEndedDailyLimit() {
+  sessionActive = false;
+  const voiceBtn = document.getElementById('voice-btn');
+  voiceBtn.disabled = true;
+  voiceBtn.style.opacity = '0.4';
+  document.getElementById('send-btn').disabled = true;
+  document.getElementById('text-input').disabled = true;
+
+  const chat = document.getElementById('chat-area');
+  const msg = document.createElement('div');
+  msg.className = 'session-end-msg';
+  msg.textContent = '🌙 今天 18 分鐘的時間用完了，明天再來找 Wes！';
+  chat.appendChild(msg);
+  chat.scrollTop = chat.scrollHeight;
+  showToast('今日配額用完，即將返回主畫面…');
+
+  setTimeout(() => logout(), 5000);
 }
 
 // ── Idle 狀態管理：5 分鐘無互動 → 橘燈「離開」 ──
@@ -1562,6 +1631,9 @@ document.getElementById('timer-display').addEventListener('touchstart', (e) => {
 }, { passive: false });
 document.getElementById('timer-display').addEventListener('touchend', cancelParentHold);
 document.getElementById('timer-display').addEventListener('touchcancel', cancelParentHold);
+
+// ── 頁面初始化：顯示今日剩餘配額 ──
+updateSetupScreen();
 
 // ── PWA Service Worker ──
 if ('serviceWorker' in navigator) {

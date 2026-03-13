@@ -1358,7 +1358,8 @@ function speakText(text) {
 // 解法：interimResults:true，持續累積 interimText，
 //        onend 時直接用累積內容送出，不等 final。
 // ══════════════════════════════════════════════════
-let interimText = '';   // 累積的即時文字
+let interimText = '';      // 已確認的 final 文字
+let lastInterimChunk = ''; // 最後一批尚未 final 的 interim 文字
 
 function toggleVoice() {
   // 如果 Wes 說話中，點一下停止
@@ -1383,7 +1384,8 @@ function toggleVoice() {
   recognition.continuous = false;
   recognition.interimResults = true;   // ← 關鍵：打開 interim
 
-  interimText = '';   // 重置累積
+  interimText = '';
+  lastInterimChunk = '';
 
   recognition.onstart = () => {
     isListening = true;
@@ -1399,20 +1401,23 @@ function toggleVoice() {
   };
 
   recognition.onresult = (e) => {
-    // 把所有結果（含 interim）都累積起來
     let finalChunk = '';
-    let interimChunk = '';
+    let currentInterim = '';
     for (let i = e.resultIndex; i < e.results.length; i++) {
       if (e.results[i].isFinal) {
         finalChunk += e.results[i][0].transcript;
       } else {
-        interimChunk += e.results[i][0].transcript;
+        currentInterim += e.results[i][0].transcript;
       }
     }
-    if (finalChunk) interimText += finalChunk;
-    // 即時顯示給使用者看
+    if (finalChunk) {
+      interimText += finalChunk;
+      lastInterimChunk = '';
+    } else {
+      lastInterimChunk = currentInterim;
+    }
     const display = document.getElementById('interim-display');
-    display.textContent = interimText + interimChunk;
+    display.textContent = interimText + lastInterimChunk;
   };
 
   recognition.onerror = (e) => {
@@ -1431,10 +1436,12 @@ function toggleVoice() {
     interim.className = '';   // 隱藏字幕
     interim.textContent = '';
 
-    // 不管是自動結束還是使用者提前停，只要有累積文字就送出
-    if (interimText.trim()) {
-      handleVoiceResult(interimText.trim());
-      interimText = '';
+    // final 文字優先，否則用最後一批 interim（自動停止時 final 可能未觸發）
+    const textToSend = interimText.trim() || lastInterimChunk.trim();
+    interimText = '';
+    lastInterimChunk = '';
+    if (textToSend) {
+      handleVoiceResult(textToSend);
     }
   };
 

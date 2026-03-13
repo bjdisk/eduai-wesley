@@ -824,7 +824,7 @@ async function sendOpeningGreeting() {
     content: '（session開始，只給開場問候，一句話，不加任何圖片標記）'
   }]);
   if (response) {
-    const clean = response.replace(/\[PARENT_REVIEW[^\]]*\]/g, '').replace(/\[IMAGE:[^\]]*\]/gi, '').trim();
+    const clean = stripSystemTags(response).replace(/\[IMAGE:[^\]]*\]/gi, '').trim();
     checkForFlags(response, '開場');
     addMessage('wes', clean);
     setTimeout(() => speakText(clean), 400);
@@ -946,7 +946,7 @@ async function sendMessage() {
   try {
     const response = await callClaude(messages);
     if (response) {
-      const { clean, query } = parseImageTag(response.replace(/\[PARENT_REVIEW[^\]]*\]/g, ''));
+      const { clean, query } = parseImageTag(stripSystemTags(response));
       checkForFlags(response, text);
       messages.push({ role: 'assistant', content: response });
       const imageData = query ? await fetchImage(query) : null;
@@ -966,7 +966,7 @@ async function handleParentCommand(cmd) {
   try {
     const response = await callClaude(messages);
     if (response) {
-      const clean = response.replace(/\[PARENT_REVIEW[^\]]*\]/g, '').trim();
+      const clean = stripSystemTags(response);
       messages.push({ role: 'assistant', content: response });
       addMessage('wes', clean);
     }
@@ -1167,6 +1167,13 @@ function fetchImage(query) {
   const emoji = getEmojiForQuery(query);
   if (emoji) return Promise.resolve({ type: 'emoji', emoji });
   return Promise.resolve(null);
+}
+
+function stripSystemTags(text) {
+  return text
+    .replace(/\[PARENT_REVIEW[^\]]*\]/gi, '')
+    .replace(/\[(PAUSE|END|REVIEW|TOPIC:[^\]]*|FLAG:[^\]]*)\]/gi, '')
+    .trim();
 }
 
 function parseImageTag(text) {
@@ -1399,7 +1406,7 @@ async function handleVoiceResult(transcript) {
   try {
     const response = await callClaude(messages);
     if (response) {
-      const { clean, query } = parseImageTag(response.replace(/\[PARENT_REVIEW[^\]]*\]/g, ''));
+      const { clean, query } = parseImageTag(stripSystemTags(response));
       checkForFlags(response, transcript);
       messages.push({ role: 'assistant', content: response });
       const imageData = query ? await fetchImage(query) : null;

@@ -260,6 +260,32 @@
   #timer-display.warning { color: var(--accent3); }
   #timer-display.danger { color: var(--danger); }
 
+  /* 冷卻期倒數：放在 setup-screen 右上角，樣式與 in-app timer 相同 */
+  #setup-cooldown-timer {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    font-family: 'Nunito', sans-serif;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--accent3);
+    background: var(--surface2);
+    padding: 6px 12px;
+    border-radius: 20px;
+    display: none; /* hidden when not in cooldown */
+  }
+
+  /* Wes 離開中的隨機訊息 */
+  #setup-cooldown-msg {
+    font-family: 'Nunito', sans-serif;
+    font-size: 14px;
+    color: var(--text-dim);
+    text-align: center;
+    max-width: 280px;
+    font-style: italic;
+    display: none;
+  }
+
   #logout-btn {
     background: none;
     border: 1.5px solid rgba(255,255,255,0.1);
@@ -674,10 +700,12 @@
 
 <!-- Setup Screen -->
 <div id="setup-screen">
-  <div class="logo">Wes</div>
+  <div id="setup-cooldown-timer"></div>
+  <div class="logo" id="setup-logo">Wes</div>
   <div class="tagline">Wesley 的朋友。</div>
-  <div id="daily-remaining" style="font-family:'Nunito',sans-serif;font-size:13px;color:var(--text-dim);margin-top:-8px;"></div>
   <button class="btn-primary" onclick="startApp()">開始</button>
+  <div id="setup-cooldown-msg"></div>
+  <div id="admin-badge" style="display:none;font-size:11px;color:var(--accent);opacity:0.7;margin-top:-12px;">⚙ Admin 模式</div>
 
   <!-- iOS PWA 安裝提示（只在 iOS + 非 standalone 時顯示） -->
   <div id="ios-install-banner">
@@ -770,7 +798,19 @@ let sessionFlags = [];
 let sessionActive = false;
 let timerInterval = null;
 let secondsLeft = 15 * 60;
-const DAILY_LIMIT_S = 18 * 60; // 每日總使用上限 18 分鐘
+const COOLDOWN_DURATION_MS = 60 * 60 * 1000; // 冷卻期 1 小時
+let cooldownInterval = null;
+let logoTapCount = 0;
+let logoTapTimer = null;
+const AWAY_MESSAGES = [
+  'Wes 去買便當了，要再等他一下喔 🍱',
+  'Wes 正在睡午覺，等一下再來找他吧 😴',
+  'Wes 去散步了，他很快就回來的 🚶',
+  'Wes 在幫別的小朋友，再等等喔 💬',
+  'Wes 去喝水了，馬上就回來！💧',
+  'Wes 去充電了，等他充好電再來 ⚡',
+  'Wes 正在想新問題，快回來了 🤔',
+];
 let recognition = null;
 let isListening = false;
 let isWaitingForResponse = false;
@@ -794,42 +834,93 @@ const IDLE_MS = 5 * 60 * 1000; // 5 分鐘無互動後切換為離開狀態
   }
 })();
 
-// ── 每日配額管理 ──
-function getTodayKey() {
-  return 'wes_used_' + new Date().toISOString().slice(0, 10);
+// ── Admin 模式 ──
+function isAdminMode() {
+  return localStorage.getItem('wes_admin') === '1';
 }
-function getUsedToday() {
-  return parseInt(localStorage.getItem(getTodayKey()) || '0', 10);
+function checkAdminParam() {
+  const p = new URLSearchParams(location.search).get('admin');
+  if (p === 'wes2025') localStorage.setItem('wes_admin', '1');
+  if (p === 'off') localStorage.removeItem('wes_admin');
 }
-function addUsedTime(secs) {
-  localStorage.setItem(getTodayKey(), getUsedToday() + secs);
+// logo 連點 5 下 → 輸入 admin key
+function handleLogoTap() {
+  logoTapCount++;
+  clearTimeout(logoTapTimer);
+  logoTapTimer = setTimeout(() => { logoTapCount = 0; }, 1500);
+  if (logoTapCount >= 5) {
+    logoTapCount = 0;
+    const key = prompt('Admin key：');
+    if (key === 'wes2025') {
+      localStorage.setItem('wes_admin', '1');
+      updateSetupScreen();
+      showToast('⚙ Admin 模式已開啟');
+    } else if (key === 'off') {
+      localStorage.removeItem('wes_admin');
+      updateSetupScreen();
+      showToast('Admin 模式已關閉');
+    }
+  }
 }
-function getRemainingToday() {
-  return Math.max(0, DAILY_LIMIT_S - getUsedToday());
+
+// ── 冷卻期管理 ──
+function getCooldownRemaining() {
+  const until = parseInt(localStorage.getItem('wes_cooldown_until') || '0', 10);
+  return Math.max(0, until - Date.now());
+}
+function isInCooldown() {
+  return !isAdminMode() && getCooldownRemaining() > 0;
+}
+function startCooldown() {
+  if (!isAdminMode()) {
+    localStorage.setItem('wes_cooldown_until', Date.now() + COOLDOWN_DURATION_MS);
+  }
 }
 function updateSetupScreen() {
-  const remaining = getRemainingToday();
-  const el = document.getElementById('daily-remaining');
+  const timerEl = document.getElementById('setup-cooldown-timer');
+  const msgEl = document.getElementById('setup-cooldown-msg');
   const btn = document.querySelector('#setup-screen .btn-primary');
-  if (!el) return;
-  if (remaining <= 0) {
-    el.textContent = '今天的時間已經用完了 🌙 明天再來找 Wes！';
-    el.style.color = 'var(--danger)';
+  const badge = document.getElementById('admin-badge');
+  if (badge) badge.style.display = isAdminMode() ? 'block' : 'none';
+  if (isInCooldown()) {
+    const totalSecs = Math.ceil(getCooldownRemaining() / 1000);
+    const h = Math.floor(totalSecs / 3600);
+    const m = Math.floor((totalSecs % 3600) / 60);
+    const s = totalSecs % 60;
+    timerEl.textContent = h > 0
+      ? `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`
+      : `${m}:${String(s).padStart(2,'0')}`;
+    timerEl.style.display = 'block';
     btn.disabled = true;
     btn.style.opacity = '0.4';
+    // 每次進入冷卻期隨機挑一句，用 data-set 避免重複換訊息
+    if (!msgEl.dataset.set) {
+      msgEl.textContent = AWAY_MESSAGES[Math.floor(Math.random() * AWAY_MESSAGES.length)];
+      msgEl.dataset.set = '1';
+    }
+    msgEl.style.display = 'block';
   } else {
-    const m = Math.floor(remaining / 60);
-    const s = remaining % 60;
-    el.textContent = `今天還剩 ${m}:${String(s).padStart(2,'0')}`;
-    el.style.color = 'var(--text-dim)';
+    timerEl.style.display = 'none';
+    msgEl.style.display = 'none';
+    msgEl.dataset.set = '';
     btn.disabled = false;
     btn.style.opacity = '';
   }
 }
+function startCooldownCountdown() {
+  if (cooldownInterval) clearInterval(cooldownInterval);
+  cooldownInterval = setInterval(() => {
+    updateSetupScreen();
+    if (!isInCooldown()) {
+      clearInterval(cooldownInterval);
+      cooldownInterval = null;
+    }
+  }, 1000);
+}
 
 // ── App Init ──
 function startApp() {
-  if (getRemainingToday() <= 0) {
+  if (isInCooldown()) {
     updateSetupScreen();
     return;
   }
@@ -863,6 +954,7 @@ function logout() {
   document.getElementById('timer-display').className = '';
   document.getElementById('status-text').textContent = '在這裡';
   updateSetupScreen();
+  if (isInCooldown()) startCooldownCountdown();
 }
 
 function startSession() {
@@ -887,21 +979,14 @@ async function sendOpeningGreeting() {
 
 // ── Timer ──
 function startTimer() {
-  // 本次 session 上限：15 分鐘 vs 今日剩餘，取較小值
-  secondsLeft = Math.min(15 * 60, getRemainingToday());
+  secondsLeft = 15 * 60;
   updateTimerDisplay();
   timerInterval = setInterval(() => {
     secondsLeft--;
-    addUsedTime(1); // 每秒累計今日使用量
     updateTimerDisplay();
     if (secondsLeft <= 0) {
       clearInterval(timerInterval);
-      // 判斷是否達到每日上限
-      if (getRemainingToday() <= 0) {
-        sessionEndedDailyLimit();
-      } else {
-        sessionEnded();
-      }
+      sessionEnded();
     }
   }, 1000);
 }
@@ -933,34 +1018,25 @@ function sessionEnded() {
   }
   addEndMsg();
 
-  // 每分鐘重複提醒，最多 3 次
+  // 每分鐘重複提醒，最多 3 次；第 3 次觸發冷卻並強制登出
   let reminderCount = 0;
   const reminderInterval = setInterval(() => {
     reminderCount++;
-    if (reminderCount >= 3) clearInterval(reminderInterval);
     showToast('今天的時間到囉！');
     addEndMsg();
+    if (reminderCount >= 3) {
+      clearInterval(reminderInterval);
+      // 最高使用時長 18 分鐘（15+3）到達，進入冷卻期
+      startCooldown();
+      const finalMsg = document.createElement('div');
+      finalMsg.className = 'session-end-msg';
+      finalMsg.textContent = '🌙 最長時間到了，Wes 先去休息，一小時後再來找他喔！';
+      chat.appendChild(finalMsg);
+      chat.scrollTop = chat.scrollHeight;
+      showToast('即將返回主畫面，進入冷卻期…');
+      setTimeout(() => logout(), 4000);
+    }
   }, 60000);
-}
-
-// 每日上限到達：顯示說明後 5 秒強制登出
-function sessionEndedDailyLimit() {
-  sessionActive = false;
-  const voiceBtn = document.getElementById('voice-btn');
-  voiceBtn.disabled = true;
-  voiceBtn.style.opacity = '0.4';
-  document.getElementById('send-btn').disabled = true;
-  document.getElementById('text-input').disabled = true;
-
-  const chat = document.getElementById('chat-area');
-  const msg = document.createElement('div');
-  msg.className = 'session-end-msg';
-  msg.textContent = '🌙 今天 18 分鐘的時間用完了，明天再來找 Wes！';
-  chat.appendChild(msg);
-  chat.scrollTop = chat.scrollHeight;
-  showToast('今日配額用完，即將返回主畫面…');
-
-  setTimeout(() => logout(), 5000);
 }
 
 // ── Idle 狀態管理：5 分鐘無互動 → 橘燈「離開」 ──
@@ -1632,8 +1708,11 @@ document.getElementById('timer-display').addEventListener('touchstart', (e) => {
 document.getElementById('timer-display').addEventListener('touchend', cancelParentHold);
 document.getElementById('timer-display').addEventListener('touchcancel', cancelParentHold);
 
-// ── 頁面初始化：顯示今日剩餘配額 ──
+// ── 頁面初始化 ──
+checkAdminParam();
+document.getElementById('setup-logo').addEventListener('click', handleLogoTap);
 updateSetupScreen();
+if (isInCooldown()) startCooldownCountdown();
 
 // ── PWA Service Worker ──
 if ('serviceWorker' in navigator) {

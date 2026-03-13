@@ -746,6 +746,17 @@
 <div id="toast"></div>
 
 <script>
+// TTS Voice Preload - 解決 iOS getVoices() 非同步問題
+let cachedVoices = [];
+function loadVoices() {
+  const v = window.speechSynthesis.getVoices();
+  if (v.length > 0) cachedVoices = v;
+}
+if ('speechSynthesis' in window) {
+  loadVoices();
+  window.speechSynthesis.addEventListener('voiceschanged', loadVoices);
+}
+
 // ── State ──
 let apiKey = '';
 let messages = [];
@@ -1147,26 +1158,39 @@ const EMOJI_MAP = {
   sheep:'🐑', goat:'🐐', deer:'🦌', hippo:'🦛', rhino:'🦏',
   zebra:'🦓', kangaroo:'🦘', koala:'🐨', sloth:'🦥',
   otter:'🦦', bat:'🦇', hedgehog:'🦔', raccoon:'🦝', skunk:'🦨',
+  frog:'🐸', snake:'🐍', crocodile:'🐊', camel:'🐫', llama:'🦙',
+  mouse:'🐭', hamster:'🐹', squirrel:'🐿️', beaver:'🦫', moose:'🫎',
   fish:'🐟', shark:'🦈', whale:'🐳', dolphin:'🐬', octopus:'🐙',
   crab:'🦀', lobster:'🦞', shrimp:'🦐', turtle:'🐢', seal:'🦭',
+  jellyfish:'🪼', blowfish:'🐡', squid:'🦑', coral:'🪸',
+  'tropical fish':'🐠', clownfish:'🐠',
   bird:'🐦', eagle:'🦅', owl:'🦉', penguin:'🐧', parrot:'🦜',
   flamingo:'🦩', peacock:'🦚', duck:'🦆', chicken:'🐔', rooster:'🐓',
+  swan:'🦢', dove:'🕊️', turkey:'🦃',
   butterfly:'🦋', bee:'🐝', ant:'🐜', bug:'🐛', ladybug:'🐞',
   spider:'🕷️', snail:'🐌', worm:'🪱', mosquito:'🦟', beetle:'🪲',
   dinosaur:'🦕', triceratops:'🦕', rex:'🦖', dragon:'🐉',
+  velociraptor:'🦖', brachiosaurus:'🦕', stegosaurus:'🦕',
+  unicorn:'🦄', mermaid:'🧜',
   tree:'🌳', flower:'🌸', rose:'🌹', sunflower:'🌻', cactus:'🌵',
   mushroom:'🍄', leaf:'🍃', seedling:'🌱', bamboo:'🎋', plant:'🪴',
   apple:'🍎', banana:'🍌', watermelon:'🍉', orange:'🍊', grape:'🍇',
   strawberry:'🍓', mango:'🥭', pineapple:'🍍', cherry:'🍒', peach:'🍑',
+  carrot:'🥕', corn:'🌽', broccoli:'🥦', tomato:'🍅', potato:'🥔',
   pizza:'🍕', hamburger:'🍔', rice:'🍚', noodle:'🍜', cake:'🎂',
   icecream:'🍦', cookie:'🍪', chocolate:'🍫', candy:'🍬', bread:'🍞',
+  egg:'🍳', cheese:'🧀', dumpling:'🥟', sushi:'🍣',
+  donut:'🍩', lollipop:'🍭', milk:'🥛', juice:'🧃',
   car:'🚗', bus:'🚌', train:'🚂', airplane:'✈️', rocket:'🚀',
   ship:'🚢', bicycle:'🚲', motorcycle:'🏍️', helicopter:'🚁', boat:'⛵',
+  ambulance:'🚑', firetruck:'🚒', tractor:'🚜', ufo:'🛸', balloon:'🎈',
   moon:'🌙', sun:'☀️', star:'⭐', planet:'🪐', earth:'🌍',
-  comet:'☄️', galaxy:'🌌', telescope:'🔭', astronaut:'👨‍🚀',
+  comet:'☄️', galaxy:'🌌', telescope:'🔭', astronaut:'👨‍🚀', satellite:'🛰️',
   mountain:'⛰️', volcano:'🌋', ocean:'🌊', rainbow:'🌈', cloud:'☁️',
   snow:'❄️', lightning:'⚡', fire:'🔥', water:'💧', wind:'💨',
-  velociraptor:'🦖', brachiosaurus:'🦕', stegosaurus:'🦕',
+  sunrise:'🌅', tornado:'🌪️', desert:'🏜️', island:'🏝️', forest:'🌲',
+  house:'🏠', castle:'🏰', school:'🏫', hospital:'🏥',
+  teddy:'🧸', kite:'🪁', ball:'⚽', puzzle:'🧩', blocks:'🧱',
 };
 
 const EMOJI_COLORS = [
@@ -1287,34 +1311,27 @@ function setTTSSpeaking(on) {
 function speakText(text) {
   if (!('speechSynthesis' in window)) return;
   window.speechSynthesis.cancel();
-
   const cleanText = text
     .replace(/\[IMAGE:[^\]]+\]/gi, '')
     .replace(/\[PARENT_REVIEW[^\]]*\]/gi, '')
     .trim();
   if (!cleanText) return;
-
   const utterance = new SpeechSynthesisUtterance(cleanText);
   utterance.lang = 'zh-TW';
-  utterance.rate = 0.92;
-  utterance.pitch = 1.1;
-
-  const voice = getBestVoice();
-  if (voice) utterance.voice = voice;
-
-  utterance.onstart = () => {
-    setTTSSpeaking(true);
-    startTTSKeepAlive();   // 啟動 iOS 保活
-  };
-  utterance.onend = () => {
-    setTTSSpeaking(false);
-    stopTTSKeepAlive();
-  };
-  utterance.onerror = () => {
-    setTTSSpeaking(false);
-    stopTTSKeepAlive();
-  };
-
+  utterance.rate = 0.88;
+  utterance.pitch = 1.15;
+  const voices = cachedVoices.length > 0
+    ? cachedVoices
+    : window.speechSynthesis.getVoices();
+  const twVoice =
+    voices.find(v => /meijia|美佳/i.test(v.name)) ||
+    voices.find(v => v.lang === 'zh-TW' && v.name.toLowerCase().includes('google')) ||
+    voices.find(v => v.lang === 'zh-TW') ||
+    voices.find(v => v.lang.startsWith('zh'));
+  if (twVoice) utterance.voice = twVoice;
+  utterance.onstart = () => setTTSSpeaking(true);
+  utterance.onend   = () => setTTSSpeaking(false);
+  utterance.onerror = () => setTTSSpeaking(false);
   window.speechSynthesis.speak(utterance);
 }
 

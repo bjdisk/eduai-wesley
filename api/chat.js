@@ -80,8 +80,8 @@ function buildDynamicContext() {
 開場問候：「${greeting}」${holiday ? `（加上${holiday}祝賀）` : ''}`;
 }
 
-// ── 去識別化遙測（背景寫入 Google Sheet，不含使用者內容）──
-function sendTelemetry(accessCode, status, tokensUsed, errorMsg) {
+// ── 去識別化遙測（寫入 Google Sheet，不含使用者內容）──
+async function sendTelemetry(accessCode, status, tokensUsed, errorMsg) {
   const telemetry = {
     timestamp: new Date().toISOString(),
     accessCode,
@@ -89,15 +89,22 @@ function sendTelemetry(accessCode, status, tokensUsed, errorMsg) {
     tokens_used: tokensUsed,
     error_msg: errorMsg
   };
-  // a) Vercel 短期除錯 log（僅統計資料，無使用者文字）
+  // a) Vercel log（僅統計資料，無使用者文字）
   console.log('[telemetry]', JSON.stringify(telemetry));
-  // b) 背景寫入 Google Sheet（fire-and-forget，絕不 await）
+  // b) 寫入 Google Sheet：必須在 handler return 前完成，否則 Vercel 會提早 kill
   if (process.env.SHEET_WEBHOOK_URL) {
-    fetch(process.env.SHEET_WEBHOOK_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(telemetry)
-    }).catch(() => {}); // 靜默忽略 webhook 錯誤，不影響主流程
+    try {
+      await Promise.race([
+        fetch(process.env.SHEET_WEBHOOK_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(telemetry)
+        }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('webhook timeout')), 3000))
+      ]);
+    } catch (e) {
+      console.warn('[telemetry] webhook failed:', e.message);
+    }
   }
 }
 
@@ -136,13 +143,13 @@ export default async function handler(req, res) {
     });
 
     const tokensUsed = (response.usage?.input_tokens ?? 0) + (response.usage?.output_tokens ?? 0);
-    sendTelemetry(accessCode, 'success', tokensUsed, '');
-
     const text = response.content?.[0]?.text ?? null;
+    // 先送遙測再回應，確保 Vercel function 不提早終止
+    await sendTelemetry(accessCode, 'success', tokensUsed, '');
     return res.status(200).json({ text });
   } catch (err) {
-    sendTelemetry(accessCode, 'error', 0, err.message);
     console.error('Claude API error:', err.message);
+    await sendTelemetry(accessCode, 'error', 0, err.message);
     return res.status(500).json({ error: 'Claude API error' });
   }
 }

@@ -2,6 +2,9 @@ import Anthropic from '@anthropic-ai/sdk';
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
+// ── 存取白名單 ──
+const WHITELIST = ['wes-mvp-01', 'wes-mvp-02', 'wes-mvp-03', 'wes-mvp-04', 'wes-mvp-05', 'leonpapa'];
+
 function buildStaticSystemPrompt() {
   return `你是 Wes，Wesley（四歲半）的神秘朋友。不是老師、助手或機器人。
 繁體中文。每次最多三句話。一次只問一個問題。沉默時不催。
@@ -77,12 +80,39 @@ function buildDynamicContext() {
 開場問候：「${greeting}」${holiday ? `（加上${holiday}祝賀）` : ''}`;
 }
 
+// ── 去識別化遙測（背景寫入 Google Sheet，不含使用者內容）──
+function sendTelemetry(accessCode, status, tokensUsed, errorMsg) {
+  const telemetry = {
+    timestamp: new Date().toISOString(),
+    accessCode,
+    status,
+    tokens_used: tokensUsed,
+    error_msg: errorMsg
+  };
+  // a) Vercel 短期除錯 log（僅統計資料，無使用者文字）
+  console.log('[telemetry]', JSON.stringify(telemetry));
+  // b) 背景寫入 Google Sheet（fire-and-forget，絕不 await）
+  if (process.env.SHEET_WEBHOOK_URL) {
+    fetch(process.env.SHEET_WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(telemetry)
+    }).catch(() => {}); // 靜默忽略 webhook 錯誤，不影響主流程
+  }
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { messages } = req.body;
+  const { messages, accessCode } = req.body;
+
+  // ── 存取驗證：白名單攔截，禁止呼叫大模型 ──
+  if (!accessCode || !WHITELIST.includes(accessCode)) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
   if (!messages || !Array.isArray(messages)) {
     return res.status(400).json({ error: 'Invalid request: messages array required' });
   }
@@ -105,10 +135,14 @@ export default async function handler(req, res) {
       messages
     });
 
+    const tokensUsed = (response.usage?.input_tokens ?? 0) + (response.usage?.output_tokens ?? 0);
+    sendTelemetry(accessCode, 'success', tokensUsed, '');
+
     const text = response.content?.[0]?.text ?? null;
     return res.status(200).json({ text });
   } catch (err) {
-    console.error('Claude API error:', err);
-    return res.status(500).json({ error: 'Claude API error', detail: err.message });
+    sendTelemetry(accessCode, 'error', 0, err.message);
+    console.error('Claude API error:', err.message);
+    return res.status(500).json({ error: 'Claude API error' });
   }
 }

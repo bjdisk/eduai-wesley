@@ -219,11 +219,22 @@
     border-radius: 50%;
     background: var(--accent2);
     animation: pulse 2s infinite;
+    transition: background 0.6s ease;
+  }
+
+  .status-dot.idle {
+    background: var(--accent3);
+    animation: pulse-slow 4s infinite;
   }
 
   @keyframes pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.4; }
+  }
+
+  @keyframes pulse-slow {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
   }
 
   #timer-display {
@@ -248,6 +259,32 @@
 
   #timer-display.warning { color: var(--accent3); }
   #timer-display.danger { color: var(--danger); }
+
+  /* 冷卻期倒數：放在 setup-screen 右上角，樣式與 in-app timer 相同 */
+  #setup-cooldown-timer {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    font-family: 'Nunito', sans-serif;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--accent3);
+    background: var(--surface2);
+    padding: 6px 12px;
+    border-radius: 20px;
+    display: none; /* hidden when not in cooldown */
+  }
+
+  /* Wes 離開中的隨機訊息 */
+  #setup-cooldown-msg {
+    font-family: 'Nunito', sans-serif;
+    font-size: 14px;
+    color: var(--text-dim);
+    text-align: center;
+    max-width: 280px;
+    font-style: italic;
+    display: none;
+  }
 
   #logout-btn {
     background: none;
@@ -650,6 +687,56 @@
     font-style: italic;
   }
 
+  /* ── ACCESS GATE ── */
+  #access-gate {
+    position: fixed;
+    inset: 0;
+    background: var(--bg);
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+    padding: 32px 24px;
+  }
+  #access-gate .logo {
+    font-family: 'Nunito', sans-serif;
+    font-size: 52px;
+    font-weight: 800;
+    color: var(--accent);
+    text-shadow: 0 0 40px rgba(91,155,213,0.4);
+  }
+  #access-gate .tagline {
+    font-size: 15px;
+    color: var(--text-dim);
+    text-align: center;
+  }
+  #access-gate input {
+    width: 100%;
+    max-width: 340px;
+    background: var(--surface2);
+    border: 1.5px solid rgba(91,155,213,0.2);
+    border-radius: var(--radius-sm);
+    padding: 14px 18px;
+    font-size: 16px;
+    color: var(--text);
+    font-family: 'Quicksand', sans-serif;
+    text-align: center;
+    letter-spacing: 0.05em;
+    outline: none;
+    transition: border-color 0.2s;
+    -webkit-appearance: none;
+  }
+  #access-gate input:focus { border-color: var(--accent); }
+  #access-gate input::placeholder { color: var(--text-dim); }
+  #access-error {
+    font-size: 13px;
+    color: var(--danger);
+    min-height: 18px;
+    text-align: center;
+  }
+
   .img-bubble {
     margin-top: 8px;
     border-radius: var(--radius);
@@ -661,11 +748,24 @@
 </head>
 <body>
 
-<!-- Setup Screen -->
-<div id="setup-screen">
+<!-- Access Gate -->
+<div id="access-gate">
   <div class="logo">Wes</div>
   <div class="tagline">Wesley 的朋友。</div>
+  <input id="access-input" type="password" placeholder="通關密語"
+    onkeydown="if(event.key==='Enter')submitAccessCode()" />
+  <button class="btn-primary" onclick="submitAccessCode()">進入</button>
+  <div id="access-error"></div>
+</div>
+
+<!-- Setup Screen -->
+<div id="setup-screen">
+  <div id="setup-cooldown-timer"></div>
+  <div class="logo" id="setup-logo">Wes</div>
+  <div class="tagline">Wesley 的朋友。</div>
   <button class="btn-primary" onclick="startApp()">開始</button>
+  <div id="setup-cooldown-msg"></div>
+  <div id="admin-badge" style="display:none;font-size:11px;color:var(--accent);opacity:0.7;margin-top:-12px;">⚙ Admin 模式</div>
 
   <!-- iOS PWA 安裝提示（只在 iOS + 非 standalone 時顯示） -->
   <div id="ios-install-banner">
@@ -758,9 +858,24 @@ let sessionFlags = [];
 let sessionActive = false;
 let timerInterval = null;
 let secondsLeft = 15 * 60;
+const COOLDOWN_DURATION_MS = 60 * 60 * 1000; // 冷卻期 1 小時
+let cooldownInterval = null;
+let logoTapCount = 0;
+let logoTapTimer = null;
+const AWAY_MESSAGES = [
+  'Wes 去買便當了，要再等他一下喔 🍱',
+  'Wes 正在睡午覺，等一下再來找他吧 😴',
+  'Wes 去散步了，他很快就回來的 🚶',
+  'Wes 在幫別的小朋友，再等等喔 💬',
+  'Wes 去喝水了，馬上就回來！💧',
+  'Wes 去充電了，等他充好電再來 ⚡',
+  'Wes 正在想新問題，快回來了 🤔',
+];
 let recognition = null;
 let isListening = false;
 let isWaitingForResponse = false;
+let idleTimer = null;
+const IDLE_MS = 5 * 60 * 1000; // 5 分鐘無互動後切換為離開狀態
 // 父端入口改為長按，原三連點變數已移除
 
 // ── iOS PWA 安裝提示偵測 ──
@@ -779,8 +894,119 @@ let isWaitingForResponse = false;
   }
 })();
 
+// ── Access Gate ──
+function isAdminSession() {
+  // sessionStorage accessCode === 'leonpapa' → 壓測 admin，豁免所有限制
+  return sessionStorage.getItem('accessCode') === 'leonpapa';
+}
+
+function submitAccessCode() {
+  const code = document.getElementById('access-input').value.trim();
+  const errEl = document.getElementById('access-error');
+  if (!code) { errEl.textContent = '請輸入通關密語'; return; }
+  // 前端先接受所有非空值（後端白名單才是最終防線）
+  sessionStorage.setItem('accessCode', code);
+  // admin session 同步設定 localStorage，使既有的 isAdminMode() 也生效
+  if (code === 'leonpapa') {
+    localStorage.setItem('wes_admin', '1');
+  }
+  errEl.textContent = '';
+  document.getElementById('access-gate').style.display = 'none';
+  updateSetupScreen();
+  if (isInCooldown()) startCooldownCountdown();
+}
+
+// ── Admin 模式 ──
+function isAdminMode() {
+  return localStorage.getItem('wes_admin') === '1';
+}
+function checkAdminParam() {
+  const p = new URLSearchParams(location.search).get('admin');
+  if (p === 'wes2025') localStorage.setItem('wes_admin', '1');
+  if (p === 'off') localStorage.removeItem('wes_admin');
+}
+// logo 連點 5 下 → 輸入 admin key
+function handleLogoTap() {
+  logoTapCount++;
+  clearTimeout(logoTapTimer);
+  logoTapTimer = setTimeout(() => { logoTapCount = 0; }, 1500);
+  if (logoTapCount >= 5) {
+    logoTapCount = 0;
+    const key = prompt('Admin key：');
+    if (key === 'wes2025') {
+      localStorage.setItem('wes_admin', '1');
+      updateSetupScreen();
+      showToast('⚙ Admin 模式已開啟');
+    } else if (key === 'off') {
+      localStorage.removeItem('wes_admin');
+      updateSetupScreen();
+      showToast('Admin 模式已關閉');
+    }
+  }
+}
+
+// ── 冷卻期管理 ──
+function getCooldownRemaining() {
+  const until = parseInt(localStorage.getItem('wes_cooldown_until') || '0', 10);
+  return Math.max(0, until - Date.now());
+}
+function isInCooldown() {
+  // Admin session (leonpapa) 或 localStorage admin 模式均豁免冷卻
+  return !isAdminMode() && !isAdminSession() && getCooldownRemaining() > 0;
+}
+function startCooldown() {
+  if (!isAdminMode()) {
+    localStorage.setItem('wes_cooldown_until', Date.now() + COOLDOWN_DURATION_MS);
+  }
+}
+function updateSetupScreen() {
+  const timerEl = document.getElementById('setup-cooldown-timer');
+  const msgEl = document.getElementById('setup-cooldown-msg');
+  const btn = document.querySelector('#setup-screen .btn-primary');
+  const badge = document.getElementById('admin-badge');
+  if (badge) badge.style.display = isAdminMode() ? 'block' : 'none';
+  if (isInCooldown()) {
+    const totalSecs = Math.ceil(getCooldownRemaining() / 1000);
+    const h = Math.floor(totalSecs / 3600);
+    const m = Math.floor((totalSecs % 3600) / 60);
+    const s = totalSecs % 60;
+    timerEl.textContent = h > 0
+      ? `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`
+      : `${m}:${String(s).padStart(2,'0')}`;
+    timerEl.style.display = 'block';
+    btn.disabled = true;
+    btn.style.opacity = '0.4';
+    // 每次進入冷卻期隨機挑一句，用 data-set 避免重複換訊息
+    if (!msgEl.dataset.set) {
+      msgEl.textContent = AWAY_MESSAGES[Math.floor(Math.random() * AWAY_MESSAGES.length)];
+      msgEl.dataset.set = '1';
+    }
+    msgEl.style.display = 'block';
+  } else {
+    timerEl.style.display = 'none';
+    msgEl.style.display = 'none';
+    msgEl.dataset.set = '';
+    btn.disabled = false;
+    btn.style.opacity = '';
+  }
+}
+function startCooldownCountdown() {
+  if (cooldownInterval) clearInterval(cooldownInterval);
+  cooldownInterval = setInterval(() => {
+    updateSetupScreen();
+    if (!isInCooldown()) {
+      clearInterval(cooldownInterval);
+      cooldownInterval = null;
+    }
+  }, 1000);
+}
+
 // ── App Init ──
 function startApp() {
+  if (isInCooldown()) {
+    updateSetupScreen();
+    return;
+  }
   document.getElementById('setup-screen').style.display = 'none';
   document.getElementById('app').style.display = 'flex';
   // ── 預先暖機 TTS，觸發 iOS voiceschanged ──
@@ -810,11 +1036,14 @@ function logout() {
   document.getElementById('timer-display').textContent = '15:00';
   document.getElementById('timer-display').className = '';
   document.getElementById('status-text').textContent = '在這裡';
+  updateSetupScreen();
+  if (isInCooldown()) startCooldownCountdown();
 }
 
 function startSession() {
   sessionActive = true;
   startTimer();
+  resetIdleTimer(); // 開始 session → 綠燈啟動計時
   setTimeout(() => sendOpeningGreeting(), 600);
 }
 
@@ -833,6 +1062,8 @@ async function sendOpeningGreeting() {
 
 // ── Timer ──
 function startTimer() {
+  secondsLeft = 15 * 60;
+  updateTimerDisplay();
   timerInterval = setInterval(() => {
     secondsLeft--;
     updateTimerDisplay();
@@ -870,36 +1101,82 @@ function sessionEnded() {
   }
   addEndMsg();
 
-  // 每分鐘重複提醒，最多 3 次
+  // 每分鐘重複提醒，最多 3 次；第 3 次觸發冷卻並強制登出
   let reminderCount = 0;
   const reminderInterval = setInterval(() => {
     reminderCount++;
-    if (reminderCount >= 3) clearInterval(reminderInterval);
     showToast('今天的時間到囉！');
     addEndMsg();
+    if (reminderCount >= 3) {
+      clearInterval(reminderInterval);
+      // 最高使用時長 18 分鐘（15+3）到達，進入冷卻期
+      startCooldown();
+      const finalMsg = document.createElement('div');
+      finalMsg.className = 'session-end-msg';
+      finalMsg.textContent = '🌙 最長時間到了，Wes 先去休息，一小時後再來找他喔！';
+      chat.appendChild(finalMsg);
+      chat.scrollTop = chat.scrollHeight;
+      showToast('即將返回主畫面，進入冷卻期…');
+      setTimeout(() => logout(), 4000);
+    }
   }, 60000);
+}
+
+// ── Idle 狀態管理：5 分鐘無互動 → 橘燈「離開」 ──
+function setWesIdle(idle) {
+  const dot  = document.querySelector('.status-dot');
+  const text = document.getElementById('status-text');
+  if (idle) {
+    dot.classList.add('idle');
+    text.textContent = '離開';
+  } else {
+    dot.classList.remove('idle');
+    text.textContent = '在這裡';
+  }
+}
+
+function resetIdleTimer() {
+  setWesIdle(false);
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => setWesIdle(true), IDLE_MS);
 }
 
 // ── Claude API ──
 async function callClaude(msgs) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 分鐘 timeout
+  resetIdleTimer(); // 有 API 呼叫 → 重置 idle 計時
+  const admin = isAdminSession();
+  // Admin session (leonpapa)：停用 AbortController，允許無限期壓力測試
+  let controller = null, timeoutId = null;
+  if (!admin) {
+    controller = new AbortController();
+    timeoutId = setTimeout(() => controller.abort(), 300000); // 一般使用者：5 分鐘 timeout
+  }
   try {
     document.getElementById('status-text').textContent = '思考中…';
-    const res = await fetch('/api/chat', {
+    const accessCode = sessionStorage.getItem('accessCode') || '';
+    const fetchOpts = {
       method: 'POST',
-      signal: controller.signal,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: msgs })
-    });
-    clearTimeout(timeoutId);
+      body: JSON.stringify({ messages: msgs, accessCode })
+    };
+    if (controller) fetchOpts.signal = controller.signal;
+    const res = await fetch('/api/chat', fetchOpts);
+    if (timeoutId) clearTimeout(timeoutId);
+    if (res.status === 401) {
+      // 密語已失效或不在白名單，退回登入閘門
+      sessionStorage.removeItem('accessCode');
+      document.getElementById('access-gate').style.display = 'flex';
+      document.getElementById('access-error').textContent = '通關密語無效，請重新輸入';
+      document.getElementById('app').style.display = 'none';
+      return null;
+    }
     const data = await res.json();
-    document.getElementById('status-text').textContent = '在這裡';
+    resetIdleTimer(); // 回應完成 → 重置計時器，確保綠燈
     if (data.text) return data.text;
     return null;
   } catch (e) {
-    clearTimeout(timeoutId);
-    document.getElementById('status-text').textContent = '在這裡';
+    if (timeoutId) clearTimeout(timeoutId);
+    resetIdleTimer(); // 錯誤後也重置（讓使用者可以再試）
     showToast(e.name === 'AbortError' ? '等太久了，請再試一次' : '連線失敗，請檢查網路');
     return null;
   }
@@ -1528,6 +1805,19 @@ document.getElementById('timer-display').addEventListener('touchstart', (e) => {
 }, { passive: false });
 document.getElementById('timer-display').addEventListener('touchend', cancelParentHold);
 document.getElementById('timer-display').addEventListener('touchcancel', cancelParentHold);
+
+// ── 頁面初始化 ──
+checkAdminParam();
+document.getElementById('setup-logo').addEventListener('click', handleLogoTap);
+// 同一 session 已驗證過 → 自動跳過閘門
+if (sessionStorage.getItem('accessCode')) {
+  document.getElementById('access-gate').style.display = 'none';
+  // 同步 localStorage admin 狀態（防止 localStorage 被清除後 session 仍是 leonpapa）
+  if (isAdminSession()) localStorage.setItem('wes_admin', '1');
+  updateSetupScreen();
+  if (isInCooldown()) startCooldownCountdown();
+}
+// 若尚未驗證，gate 保持顯示，updateSetupScreen 由 submitAccessCode() 呼叫
 
 // ── PWA Service Worker ──
 if ('serviceWorker' in navigator) {

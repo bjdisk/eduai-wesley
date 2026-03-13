@@ -1,11 +1,11 @@
 // EduAI Wesley — Service Worker
 // 快取核心資源，讓 App 離線也能啟動
 
-const CACHE = 'wes-v2.6';
+const CACHE = 'wes-v2.7';
 const CORE = [
-  '/eduai-wesley/',
-  '/eduai-wesley/index.html',
-  '/eduai-wesley/manifest.json'
+  '/',
+  '/index.html',
+  '/manifest.json'
 ];
 
 // 安裝：快取核心資源

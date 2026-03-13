@@ -687,6 +687,56 @@
     font-style: italic;
   }
 
+  /* ── ACCESS GATE ── */
+  #access-gate {
+    position: fixed;
+    inset: 0;
+    background: var(--bg);
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+    padding: 32px 24px;
+  }
+  #access-gate .logo {
+    font-family: 'Nunito', sans-serif;
+    font-size: 52px;
+    font-weight: 800;
+    color: var(--accent);
+    text-shadow: 0 0 40px rgba(91,155,213,0.4);
+  }
+  #access-gate .tagline {
+    font-size: 15px;
+    color: var(--text-dim);
+    text-align: center;
+  }
+  #access-gate input {
+    width: 100%;
+    max-width: 340px;
+    background: var(--surface2);
+    border: 1.5px solid rgba(91,155,213,0.2);
+    border-radius: var(--radius-sm);
+    padding: 14px 18px;
+    font-size: 16px;
+    color: var(--text);
+    font-family: 'Quicksand', sans-serif;
+    text-align: center;
+    letter-spacing: 0.05em;
+    outline: none;
+    transition: border-color 0.2s;
+    -webkit-appearance: none;
+  }
+  #access-gate input:focus { border-color: var(--accent); }
+  #access-gate input::placeholder { color: var(--text-dim); }
+  #access-error {
+    font-size: 13px;
+    color: var(--danger);
+    min-height: 18px;
+    text-align: center;
+  }
+
   .img-bubble {
     margin-top: 8px;
     border-radius: var(--radius);
@@ -697,6 +747,16 @@
 </style>
 </head>
 <body>
+
+<!-- Access Gate -->
+<div id="access-gate">
+  <div class="logo">Wes</div>
+  <div class="tagline">Wesley 的朋友。</div>
+  <input id="access-input" type="password" placeholder="通關密語"
+    onkeydown="if(event.key==='Enter')submitAccessCode()" />
+  <button class="btn-primary" onclick="submitAccessCode()">進入</button>
+  <div id="access-error"></div>
+</div>
 
 <!-- Setup Screen -->
 <div id="setup-screen">
@@ -834,6 +894,28 @@ const IDLE_MS = 5 * 60 * 1000; // 5 分鐘無互動後切換為離開狀態
   }
 })();
 
+// ── Access Gate ──
+function isAdminSession() {
+  // sessionStorage accessCode === 'leonpapa' → 壓測 admin，豁免所有限制
+  return sessionStorage.getItem('accessCode') === 'leonpapa';
+}
+
+function submitAccessCode() {
+  const code = document.getElementById('access-input').value.trim();
+  const errEl = document.getElementById('access-error');
+  if (!code) { errEl.textContent = '請輸入通關密語'; return; }
+  // 前端先接受所有非空值（後端白名單才是最終防線）
+  sessionStorage.setItem('accessCode', code);
+  // admin session 同步設定 localStorage，使既有的 isAdminMode() 也生效
+  if (code === 'leonpapa') {
+    localStorage.setItem('wes_admin', '1');
+  }
+  errEl.textContent = '';
+  document.getElementById('access-gate').style.display = 'none';
+  updateSetupScreen();
+  if (isInCooldown()) startCooldownCountdown();
+}
+
 // ── Admin 模式 ──
 function isAdminMode() {
   return localStorage.getItem('wes_admin') === '1';
@@ -869,7 +951,8 @@ function getCooldownRemaining() {
   return Math.max(0, until - Date.now());
 }
 function isInCooldown() {
-  return !isAdminMode() && getCooldownRemaining() > 0;
+  // Admin session (leonpapa) 或 localStorage admin 模式均豁免冷卻
+  return !isAdminMode() && !isAdminSession() && getCooldownRemaining() > 0;
 }
 function startCooldown() {
   if (!isAdminMode()) {
@@ -1061,23 +1144,38 @@ function resetIdleTimer() {
 // ── Claude API ──
 async function callClaude(msgs) {
   resetIdleTimer(); // 有 API 呼叫 → 重置 idle 計時
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 分鐘 timeout
+  const admin = isAdminSession();
+  // Admin session (leonpapa)：停用 AbortController，允許無限期壓力測試
+  let controller = null, timeoutId = null;
+  if (!admin) {
+    controller = new AbortController();
+    timeoutId = setTimeout(() => controller.abort(), 300000); // 一般使用者：5 分鐘 timeout
+  }
   try {
     document.getElementById('status-text').textContent = '思考中…';
-    const res = await fetch('/api/chat', {
+    const accessCode = sessionStorage.getItem('accessCode') || '';
+    const fetchOpts = {
       method: 'POST',
-      signal: controller.signal,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: msgs })
-    });
-    clearTimeout(timeoutId);
+      body: JSON.stringify({ messages: msgs, accessCode })
+    };
+    if (controller) fetchOpts.signal = controller.signal;
+    const res = await fetch('/api/chat', fetchOpts);
+    if (timeoutId) clearTimeout(timeoutId);
+    if (res.status === 401) {
+      // 密語已失效或不在白名單，退回登入閘門
+      sessionStorage.removeItem('accessCode');
+      document.getElementById('access-gate').style.display = 'flex';
+      document.getElementById('access-error').textContent = '通關密語無效，請重新輸入';
+      document.getElementById('app').style.display = 'none';
+      return null;
+    }
     const data = await res.json();
     resetIdleTimer(); // 回應完成 → 重置計時器，確保綠燈
     if (data.text) return data.text;
     return null;
   } catch (e) {
-    clearTimeout(timeoutId);
+    if (timeoutId) clearTimeout(timeoutId);
     resetIdleTimer(); // 錯誤後也重置（讓使用者可以再試）
     showToast(e.name === 'AbortError' ? '等太久了，請再試一次' : '連線失敗，請檢查網路');
     return null;
@@ -1711,8 +1809,15 @@ document.getElementById('timer-display').addEventListener('touchcancel', cancelP
 // ── 頁面初始化 ──
 checkAdminParam();
 document.getElementById('setup-logo').addEventListener('click', handleLogoTap);
-updateSetupScreen();
-if (isInCooldown()) startCooldownCountdown();
+// 同一 session 已驗證過 → 自動跳過閘門
+if (sessionStorage.getItem('accessCode')) {
+  document.getElementById('access-gate').style.display = 'none';
+  // 同步 localStorage admin 狀態（防止 localStorage 被清除後 session 仍是 leonpapa）
+  if (isAdminSession()) localStorage.setItem('wes_admin', '1');
+  updateSetupScreen();
+  if (isInCooldown()) startCooldownCountdown();
+}
+// 若尚未驗證，gate 保持顯示，updateSetupScreen 由 submitAccessCode() 呼叫
 
 // ── PWA Service Worker ──
 if ('serviceWorker' in navigator) {

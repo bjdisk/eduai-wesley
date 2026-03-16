@@ -97,7 +97,8 @@ function buildDynamicContext() {
 }
 
 // ── 去識別化遙測（寫入 Google Sheet，不含使用者內容）──
-async function sendTelemetry(accessCode, status, tokensUsed, errorMsg) {
+// alertEmail: 非 null 時代表本次觸發深層安全警報，標記 IMMEDIATE_ATTENTION
+async function sendTelemetry(accessCode, status, tokensUsed, errorMsg, alertEmail = null) {
   const telemetry = {
     timestamp: new Date().toISOString(),
     accessCode,
@@ -105,8 +106,13 @@ async function sendTelemetry(accessCode, status, tokensUsed, errorMsg) {
     tokens_used: tokensUsed,
     error_msg: errorMsg
   };
-  // a) Vercel log（僅統計資料，無使用者文字）
-  console.log('[telemetry]', JSON.stringify(telemetry));
+  if (alertEmail) {
+    telemetry.emergency_email = alertEmail;
+    telemetry.alert_level = 'IMMEDIATE_ATTENTION';
+  }
+  // a) Vercel log（alertEmail 存在時加上醒目標籤）
+  const logPrefix = alertEmail ? '[telemetry][IMMEDIATE_ATTENTION]' : '[telemetry]';
+  console.log(logPrefix, JSON.stringify(telemetry));
   // b) 寫入 Google Sheet：必須在 handler return 前完成，否則 Vercel 會提早 kill
   if (process.env.SHEET_WEBHOOK_URL) {
     try {
@@ -175,10 +181,20 @@ export default async function handler(req, res) {
     });
 
     const tokensUsed = (response.usage?.input_tokens ?? 0) + (response.usage?.output_tokens ?? 0);
-    const text = response.content?.[0]?.text ?? null;
+    const rawText = response.content?.[0]?.text ?? null;
+
+    // ── Frontend Sanitization：剝除所有 [PARENT_REVIEW:...] 標籤，Wesley 不會看到系統標記 ──
+    const sanitizedText = rawText
+      ? rawText.replace(/\s*\[PARENT_REVIEW:[^\]]*\]/gi, '').trim()
+      : null;
+
+    // ── Alert Logic：偵測警報標籤，帶入緊急 email 觸發 IMMEDIATE_ATTENTION ──
+    const hasAlert = rawText && /\[PARENT_REVIEW/i.test(rawText);
+    const alertEmail = hasAlert ? (process.env.EMERGENCY_EMAIL || null) : null;
+
     // 先送遙測再回應，確保 Vercel function 不提早終止
-    await sendTelemetry(accessCode, 'success', tokensUsed, '');
-    return res.status(200).json({ text });
+    await sendTelemetry(accessCode, 'success', tokensUsed, '', alertEmail);
+    return res.status(200).json({ text: sanitizedText });
   } catch (err) {
     console.error('Claude API error:', err.message);
     await sendTelemetry(accessCode, 'error', 0, err.message);

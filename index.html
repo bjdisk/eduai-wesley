@@ -1070,7 +1070,7 @@ function logout() {
   document.getElementById('access-gate').style.display = 'flex';
   document.getElementById('setup-screen').style.display = 'flex';
   document.getElementById('timer-display').textContent = '15:00';
-  document.getElementById('timer-display').className = '';
+  document.getElementById('timer-display').classList.remove('danger', 'warning', 'arming');
   document.getElementById('status-text').textContent = '在這裡';
 }
 
@@ -1113,7 +1113,10 @@ function updateTimerDisplay() {
   const m = Math.floor(secondsLeft / 60);
   const s = secondsLeft % 60;
   el.textContent = `${m}:${String(s).padStart(2,'0')}`;
-  el.className = secondsLeft <= 60 ? 'danger' : secondsLeft <= 3*60 ? 'warning' : '';
+  // 用 classList 精確操作，不覆蓋 arming 等其他 class
+  el.classList.remove('danger', 'warning');
+  if (secondsLeft <= 60) el.classList.add('danger');
+  else if (secondsLeft <= 3 * 60) el.classList.add('warning');
 }
 
 function sessionEnded() {

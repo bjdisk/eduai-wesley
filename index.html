@@ -569,7 +569,7 @@
     position: fixed;
     inset: 0;
     background: rgba(0,0,0,0.85);
-    z-index: 200;
+    z-index: 9999;
     display: none;
     flex-direction: column;
     padding: 32px 24px;
@@ -900,20 +900,46 @@ function isAdminSession() {
   return sessionStorage.getItem('accessCode') === 'leonpapa';
 }
 
-function submitAccessCode() {
+async function submitAccessCode() {
   const code = document.getElementById('access-input').value.trim();
   const errEl = document.getElementById('access-error');
+  const btn   = document.querySelector('#access-gate .btn-primary');
   if (!code) { errEl.textContent = '請輸入通關密語'; return; }
-  // 前端先接受所有非空值（後端白名單才是最終防線）
-  sessionStorage.setItem('accessCode', code);
-  // admin session 同步設定 localStorage，使既有的 isAdminMode() 也生效
-  if (code === 'leonpapa') {
-    localStorage.setItem('wes_admin', '1');
-  }
+
+  // 送輕量請求到後端驗證（不帶 messages → 400；code 無效 → 401）
+  btn.disabled = true;
   errEl.textContent = '';
-  document.getElementById('access-gate').style.display = 'none';
-  updateSetupScreen();
-  if (isInCooldown()) startCooldownCountdown();
+  try {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ accessCode: code })
+    });
+    if (res.status === 401) {
+      errEl.textContent = '通關密語不對，再試一次';
+      return;
+    }
+    // 非 401 → code 通過白名單，存入 session
+    sessionStorage.setItem('accessCode', code);
+    if (code === 'leonpapa') localStorage.setItem('wes_admin', '1');
+
+    document.getElementById('access-gate').style.display = 'none';
+
+    if (isInCooldown()) {
+      // 冷卻中：顯示等待畫面
+      document.getElementById('setup-screen').style.display = 'flex';
+      updateSetupScreen();
+      startCooldownCountdown();
+    } else {
+      // 直接進入對話，跳過「開始」畫面
+      document.getElementById('setup-screen').style.display = 'none';
+      startApp();
+    }
+  } catch (_) {
+    errEl.textContent = '連線失敗，請稍後再試';
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 // ── Admin 模式 ──
@@ -1367,6 +1393,8 @@ function updateFlagsPanel() {
 
 // ── Parent Panel ──
 function openParentPanel() {
+  // 確保控制台永遠置頂，即使 access-gate 意外出現也不遮擋
+  document.getElementById('access-gate').style.display = 'none';
   document.getElementById('parent-panel').style.display = 'flex';
   updateFlagsPanel();
 }

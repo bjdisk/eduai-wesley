@@ -952,19 +952,14 @@ function checkAdminParam() {
   // 注意：URL param 開啟 admin 已移除（避免密碼出現在瀏覽器歷史記錄）
   // 開啟方式：logo 連點 5 下 → 輸入 admin key
 }
-// logo 連點 5 下 → 輸入 admin key
+// logo 連點 5 下 → 關閉 admin 模式（開啟僅透過 leonpapa 登入）
 function handleLogoTap() {
   logoTapCount++;
   clearTimeout(logoTapTimer);
   logoTapTimer = setTimeout(() => { logoTapCount = 0; }, 1500);
   if (logoTapCount >= 5) {
     logoTapCount = 0;
-    const key = prompt('Admin key：');
-    if (key === 'wes2025') {
-      localStorage.setItem('wes_admin', '1');
-      updateSetupScreen();
-      showToast('⚙ Admin 模式已開啟');
-    } else if (key === 'off') {
+    if (isAdminMode()) {
       localStorage.removeItem('wes_admin');
       updateSetupScreen();
       showToast('Admin 模式已關閉');
@@ -1082,13 +1077,13 @@ function startSession() {
 }
 
 async function sendOpeningGreeting() {
-  const response = await callClaude([{
-    role: 'user',
-    content: '（session開始，只給開場問候，一句話，不加任何圖片標記）'
-  }]);
-  if (response) {
-    const clean = stripSystemTags(response).replace(/\[IMAGE:[^\]]*\]/gi, '').trim();
-    checkForFlags(response, '開場');
+  const greetingMsg = { role: 'user', content: '（session開始，只給開場問候，一句話，不加任何圖片標記）' };
+  const result = await callClaude([greetingMsg]);
+  if (result) {
+    const clean = stripSystemTags(result.text).replace(/\[IMAGE:[^\]]*\]/gi, '').trim();
+    // 推入對話歷史，讓後續 Claude 有開場上下文
+    messages.push(greetingMsg);
+    messages.push({ role: 'assistant', content: result.text });
     addMessage('wes', clean);
     setTimeout(() => speakText(clean), 400);
   }
@@ -1209,7 +1204,7 @@ async function callClaude(msgs) {
     }
     const data = await res.json();
     resetIdleTimer(); // 回應完成 → 重置計時器，確保綠燈
-    if (data.text) return data.text;
+    if (data.text) return { text: data.text, flags: data.flags || [] };
     return null;
   } catch (e) {
     if (timeoutId) clearTimeout(timeoutId);
@@ -1258,11 +1253,11 @@ async function sendMessage() {
   showTyping();
   setProcessing(true);
   try {
-    const response = await callClaude(messages);
-    if (response) {
-      const { clean, query } = parseImageTag(stripSystemTags(response));
-      checkForFlags(response, text);
-      messages.push({ role: 'assistant', content: response });
+    const result = await callClaude(messages);
+    if (result) {
+      const { clean, query } = parseImageTag(stripSystemTags(result.text));
+      checkForFlags(result.flags, text);
+      messages.push({ role: 'assistant', content: result.text });
       const imageData = query ? await fetchImage(query) : null;
       addMessage('wes', clean.trim(), imageData);
       speakText(clean.trim());
@@ -1278,10 +1273,10 @@ async function handleParentCommand(cmd) {
   setProcessing(true);
   messages.push({ role: 'user', content: cmd });
   try {
-    const response = await callClaude(messages);
-    if (response) {
-      const clean = stripSystemTags(response);
-      messages.push({ role: 'assistant', content: response });
+    const result = await callClaude(messages);
+    if (result) {
+      const clean = stripSystemTags(result.text);
+      messages.push({ role: 'assistant', content: result.text });
       addMessage('wes', clean);
     }
   } finally {
@@ -1347,18 +1342,14 @@ function hideTyping() {
   if (el) el.remove();
 }
 
-function checkForFlags(response, userMsg) {
-  const flagMatch = response.match(/\[PARENT_REVIEW:([^\]]+)\]/);
-  if (flagMatch) {
-    const flag = {
-      time: new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' }),
-      reason: flagMatch[1],
-      context: userMsg.substring(0, 60)
-    };
-    sessionFlags.push(flag);
-    updateFlagsPanel();
-    showToast('⚑ 已標記');
-  }
+function checkForFlags(flags, userMsg) {
+  if (!flags || flags.length === 0) return;
+  const time = new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' });
+  flags.forEach(reason => {
+    sessionFlags.push({ time, reason, context: userMsg.substring(0, 60) });
+  });
+  updateFlagsPanel();
+  showToast('⚑ 已標記');
 }
 
 function updateFlagsPanel() {
@@ -1551,7 +1542,6 @@ function fetchImage(query) {
 
 function stripSystemTags(text) {
   return text
-    .replace(/\[PARENT_REVIEW[^\]]*\]/gi, '')
     .replace(/\[(PAUSE|END|REVIEW|TOPIC:[^\]]*|FLAG:[^\]]*)\]/gi, '')
     .trim();
 }
@@ -1624,16 +1614,6 @@ function stopTTSKeepAlive() {
   }
 }
 
-function getBestVoice() {
-  const voices = window.speechSynthesis.getVoices();
-  return (
-    voices.find(v => v.lang === 'zh-TW' && v.name.includes('Google')) ||
-    voices.find(v => v.lang === 'zh-TW') ||
-    voices.find(v => v.lang.startsWith('zh')) ||
-    null
-  );
-}
-
 function setTTSSpeaking(on) {
   isSpeaking = on;
   const btn = document.getElementById('voice-btn');
@@ -1656,7 +1636,6 @@ function speakText(text) {
   window.speechSynthesis.cancel();
   const cleanText = text
     .replace(/\[IMAGE:[^\]]+\]/gi, '')
-    .replace(/\[PARENT_REVIEW[^\]]*\]/gi, '')
     .trim();
   if (!cleanText) return;
   const utterance = new SpeechSynthesisUtterance(cleanText);
@@ -1791,11 +1770,11 @@ async function handleVoiceResult(transcript) {
   showTyping();
   setProcessing(true);
   try {
-    const response = await callClaude(messages);
-    if (response) {
-      const { clean, query } = parseImageTag(stripSystemTags(response));
-      checkForFlags(response, transcript);
-      messages.push({ role: 'assistant', content: response });
+    const result = await callClaude(messages);
+    if (result) {
+      const { clean, query } = parseImageTag(stripSystemTags(result.text));
+      checkForFlags(result.flags, transcript);
+      messages.push({ role: 'assistant', content: result.text });
       const imageData = query ? await fetchImage(query) : null;
       addMessage('wes', clean.trim(), imageData);
       speakText(clean.trim());

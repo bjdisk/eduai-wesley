@@ -179,6 +179,11 @@ export default async function handler(req, res) {
     const cacheHitTokens = response.usage?.cache_read_input_tokens ?? 0;
     const rawText = response.content?.[0]?.text ?? null;
 
+    // ── 提取警報旗標（在淨化前讀取，保留原因文字供父端顯示）──
+    const flagMatches = rawText
+      ? [...rawText.matchAll(/\[PARENT_REVIEW:([^\]]*)\]/gi)].map(m => m[1].trim()).filter(Boolean)
+      : [];
+
     // ── Frontend Sanitization：剝除所有 [PARENT_REVIEW:...] 標籤，Wesley 不會看到系統標記 ──
     const sanitizedText = rawText
       ? rawText.replace(/\s*\[PARENT_REVIEW:[^\]]*\]/gi, '').trim()
@@ -186,7 +191,7 @@ export default async function handler(req, res) {
 
     // 先送遙測再回應，確保 Vercel function 不提早終止
     await sendTelemetry(accessCode, 'success', tokensUsed, '', cacheHitTokens);
-    return res.status(200).json({ text: sanitizedText });
+    return res.status(200).json({ text: sanitizedText, flags: flagMatches });
   } catch (err) {
     console.error('Claude API error:', err.message);
     await sendTelemetry(accessCode, 'error', 0, err.message);
